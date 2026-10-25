@@ -42,6 +42,7 @@ import {
   StakeOption,
   findMatch,
   createPracticeMatch,
+  subscribeLiveStakesPlayerCounts,
 } from '@/lib/game-service';
 import { HowToPlayModal } from '@/components/HowToPlayModal';
 
@@ -64,8 +65,21 @@ export function RummyAddaLobby() {
   }, [format]);
 
   const [stakeIndex, setStakeIndex] = useState<number>(0);
+  const [stakePlayerCounts, setStakePlayerCounts] = useState<Record<number, number>>({});
   const [isLoadingMatch, setIsLoadingMatch] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Real-time live player counts subscription across stakes
+  useEffect(() => {
+    const unsubscribe = subscribeLiveStakesPlayerCounts(format, playerCount, (counts) => {
+      setStakePlayerCounts(counts);
+    });
+    return () => {
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+    };
+  }, [format, playerCount]);
 
   // Modals & Drawers
   const [showWalletDropdown, setShowWalletDropdown] = useState(false);
@@ -80,6 +94,8 @@ export function RummyAddaLobby() {
     pointValue: 0.25,
     name: 'Micro Stakes',
   };
+
+  const activeWaitingCount = stakePlayerCounts[currentStake.entryFee] || 0;
 
   const playableBalance = getPlayableBalance(wallet);
   const withdrawableBalance = getWithdrawableBalance(wallet);
@@ -555,32 +571,55 @@ export function RummyAddaLobby() {
               </button>
             </div>
 
-            {/* Sub-details: Point Value */}
-            <div className="space-y-1 pt-1">
+            {/* Sub-details: Point Value & Active Waiting Players */}
+            <div className="space-y-1.5 pt-1">
               {/* Point Value */}
               <p className="text-xs sm:text-sm text-slate-200 font-semibold">
                 Point Value: {currentStake.pointValue}
               </p>
 
+              {/* Real-time active waiting player count per table */}
+              {activeWaitingCount > 0 ? (
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/50 text-emerald-300 text-xs font-black shadow-sm animate-pulse">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+                  <span>
+                    🟢 {activeWaitingCount} {activeWaitingCount === 1 ? 'player is active' : 'players are active'} / Boost
+                  </span>
+                </div>
+              ) : (
+                <p className="text-[11px] text-slate-400 font-medium">
+                  Table open (0 active)
+                </p>
+              )}
+
               {/* Quick link to see all available player counts across stakes */}
-              <button
-                type="button"
-                onClick={() => setShowAllStakesModal(true)}
-                className="text-[11px] text-amber-400 hover:text-amber-300 underline font-semibold transition-colors mt-1"
-              >
-                📊 View All Stakes
-              </button>
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setShowAllStakesModal(true)}
+                  className="text-[11px] text-amber-400 hover:text-amber-300 underline font-semibold transition-colors mt-0.5"
+                >
+                  📊 View All Stakes
+                </button>
+              </div>
             </div>
           </div>
 
           {/* PLAY NOW Button & Active Waiting Status */}
           <div className="pt-2 flex flex-col items-center justify-center gap-2">
-            {isLoadingMatch && (
+            {isLoadingMatch ? (
               <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold animate-pulse">
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                <span>1 player is active / Boost</span>
+                <span>Entering Table...</span>
               </div>
-            )}
+            ) : activeWaitingCount > 0 ? (
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span>
+                  🟢 {activeWaitingCount} {activeWaitingCount === 1 ? 'player is active' : 'players are active'} / Boost
+                </span>
+              </div>
+            ) : null}
             <button
               type="button"
               onClick={handlePlayNow}
@@ -590,7 +629,7 @@ export function RummyAddaLobby() {
               {isLoadingMatch ? (
                 <span className="flex items-center gap-2">
                   <Loader2 className="w-5 h-5 animate-spin text-black" />
-                  <span>1 Player is active / Boost...</span>
+                  <span>Entering Table...</span>
                 </span>
               ) : (
                 <span>PLAY NOW</span>
@@ -694,6 +733,7 @@ export function RummyAddaLobby() {
             <div className="space-y-2">
               {currentStakes.map((stake, idx) => {
                 const isSelected = idx === stakeIndex;
+                const activeCount = stakePlayerCounts[stake.entryFee] || 0;
                 return (
                   <div
                     key={stake.entryFee}
@@ -717,8 +757,18 @@ export function RummyAddaLobby() {
                       <span className="text-[11px] text-slate-400">{stake.name}</span>
                     </div>
 
-                    <div className="text-right">
-                      <span className="text-xs font-semibold text-slate-400">
+                    <div className="text-right flex flex-col items-end gap-1">
+                      {activeCount > 0 ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[11px] font-extrabold animate-pulse">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                          <span>{activeCount} active / Boost</span>
+                        </span>
+                      ) : (
+                        <span className="text-[11px] font-medium text-slate-400">
+                          0 active
+                        </span>
+                      )}
+                      <span className="text-[10px] font-semibold text-slate-400">
                         {isSelected ? '✓ Selected' : 'Tap to Select'}
                       </span>
                     </div>

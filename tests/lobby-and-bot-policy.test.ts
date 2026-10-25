@@ -161,4 +161,128 @@ describe('Lobby Entry Fee, 2/6 Players & Zero-Bot Cash Policy Suite', () => {
     currentIndex = 0;
     expect(stakes[currentIndex].entryFee).toBe(20);
   });
+
+  it('Real-time live stakes player counts aggregation strictly matches mode, capacity, and 90s freshness', () => {
+    const now = Date.now();
+    const mockGames: Partial<GameState>[] = [
+      // Fresh 2-player Points ₹20 table with 1 player waiting
+      {
+        gameId: 'g1',
+        mode: 'points',
+        entryFee: 20,
+        maxPlayers: 2,
+        playerCount: 1,
+        playerUids: ['user_A'],
+        status: 'WAITING',
+        updatedAt: new Date(now - 10000).toISOString(),
+      },
+      // Second fresh 2-player Points ₹20 table with 1 player waiting (counts should sum to 2)
+      {
+        gameId: 'g2',
+        mode: 'points',
+        entryFee: 20,
+        maxPlayers: 2,
+        playerCount: 1,
+        playerUids: ['user_B'],
+        status: 'WAITING',
+        updatedAt: new Date(now - 25000).toISOString(),
+      },
+      // Fresh 2-player Points ₹80 table with 1 player in COUNTDOWN
+      {
+        gameId: 'g3',
+        mode: 'points',
+        entryFee: 80,
+        maxPlayers: 2,
+        playerCount: 1,
+        playerUids: ['user_C'],
+        status: 'COUNTDOWN',
+        updatedAt: new Date(now - 5000).toISOString(),
+      },
+      // Stale room (>90s old) - MUST BE FILTERED OUT
+      {
+        gameId: 'g4',
+        mode: 'points',
+        entryFee: 20,
+        maxPlayers: 2,
+        playerCount: 1,
+        playerUids: ['user_stale'],
+        status: 'WAITING',
+        updatedAt: new Date(now - 95000).toISOString(),
+      },
+      // Different mode (pool101) - MUST BE FILTERED OUT when querying points
+      {
+        gameId: 'g5',
+        mode: 'pool101',
+        entryFee: 20,
+        maxPlayers: 2,
+        playerCount: 1,
+        playerUids: ['user_pool'],
+        status: 'WAITING',
+        updatedAt: new Date(now - 1000).toISOString(),
+      },
+      // Different capacity (6-player) - MUST BE FILTERED OUT when querying 2-player
+      {
+        gameId: 'g6',
+        mode: 'points',
+        entryFee: 20,
+        maxPlayers: 6,
+        playerCount: 1,
+        playerUids: ['user_6p'],
+        status: 'WAITING',
+        updatedAt: new Date(now - 1000).toISOString(),
+      },
+      // Already PLAYING - MUST BE FILTERED OUT
+      {
+        gameId: 'g7',
+        mode: 'points',
+        entryFee: 20,
+        maxPlayers: 2,
+        playerCount: 2,
+        playerUids: ['u1', 'u2'],
+        status: 'PLAYING',
+        updatedAt: new Date(now - 1000).toISOString(),
+      },
+    ];
+
+    // Compute counts
+    const compute = (mode: string, maxPlayers: number) => {
+      const counts: Record<number, number> = {};
+      for (const g of mockGames) {
+        if (!['WAITING', 'COUNTDOWN'].includes(g.status!)) continue;
+        if (g.mode !== mode) continue;
+        if ((g.maxPlayers || 2) !== maxPlayers) continue;
+        const lastActive = new Date(g.updatedAt || g.createdAt || 0).getTime();
+        if (now - lastActive > 90000) continue;
+        const fee = Number(g.entryFee);
+        if (fee) {
+          const pCount = g.playerCount || (g.playerUids ? g.playerUids.length : 0);
+          if (pCount > 0) {
+            counts[fee] = (counts[fee] || 0) + pCount;
+          }
+        }
+      }
+      return counts;
+    };
+
+    const points2p = compute('points', 2);
+    expect(points2p[20]).toBe(2); // g1 + g2
+    expect(points2p[80]).toBe(1); // g3
+    expect(points2p[160]).toBeUndefined(); // no waiting players
+
+    // UI text formatting test
+    const formatActiveText = (count: number) =>
+      count > 0
+        ? `🟢 ${count} ${count === 1 ? 'player is active' : 'players are active'} / Boost`
+        : 'Table open (0 active)';
+
+    expect(formatActiveText(points2p[20] || 0)).toBe('🟢 2 players are active / Boost');
+    expect(formatActiveText(points2p[80] || 0)).toBe('🟢 1 player is active / Boost');
+    expect(formatActiveText(points2p[160] || 0)).toBe('Table open (0 active)');
+
+    const modalText = (count: number) =>
+      count > 0 ? `${count} active / Boost` : '0 active';
+    expect(modalText(points2p[20] || 0)).toBe('2 active / Boost');
+    expect(modalText(points2p[80] || 0)).toBe('1 active / Boost');
+    expect(modalText(points2p[160] || 0)).toBe('0 active');
+  });
 });

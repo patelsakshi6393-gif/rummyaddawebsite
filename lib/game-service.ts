@@ -656,13 +656,108 @@ export async function getAllStakesPlayerCounts(
 }
 
 /**
+ * Real-time subscription to active player counts across all stakes for a given mode and table capacity.
+ * Uses Firestore onSnapshot on collection(db, 'games') where status in ['WAITING', 'COUNTDOWN'].
+ * Filters for fresh rooms within 90s, matching mode and maxPlayers.
+ * Returns a map of { [entryFee]: activeCount } where activeCount is the count of players currently waiting/seated.
+ * Returns an unsubscribe cleanup function.
+ */
+export function subscribeLiveStakesPlayerCounts(
+  mode: GameMode,
+  maxPlayers: number = 2,
+  callback: (counts: Record<number, number>) => void
+): () => void {
+  try {
+    const q = query(
+      collection(db, 'games'),
+      where('status', 'in', ['WAITING', 'COUNTDOWN'])
+    );
+
+    let latestSnapshot: any = null;
+
+    const computeAndEmitCounts = () => {
+      if (!latestSnapshot) {
+        callback({});
+        return;
+      }
+      const counts: Record<number, number> = {};
+      const now = Date.now();
+      latestSnapshot.forEach((docSnap: any) => {
+        const data = docSnap.data() as GameState;
+        if (!data) return;
+        if (data.mode !== mode) return;
+        const tableMax = data.maxPlayers || 2;
+        if (tableMax !== maxPlayers) return;
+
+        // Freshness check: must have activity within last 90 seconds
+        let lastActive = 0;
+        if (data.updatedAt) {
+          if (typeof data.updatedAt === 'string') {
+            lastActive = new Date(data.updatedAt).getTime();
+          } else if (typeof (data.updatedAt as any).toDate === 'function') {
+            lastActive = (data.updatedAt as any).toDate().getTime();
+          } else if ((data.updatedAt as any).seconds) {
+            lastActive = (data.updatedAt as any).seconds * 1000;
+          }
+        }
+        if (!lastActive && data.createdAt) {
+          if (typeof data.createdAt === 'string') {
+            lastActive = new Date(data.createdAt).getTime();
+          } else if (typeof (data.createdAt as any).toDate === 'function') {
+            lastActive = (data.createdAt as any).toDate().getTime();
+          } else if ((data.createdAt as any).seconds) {
+            lastActive = (data.createdAt as any).seconds * 1000;
+          }
+        }
+        if (lastActive > 0 && (now - lastActive) > 90000) return;
+
+        const fee = Number(data.entryFee);
+        if (fee !== undefined && !isNaN(fee)) {
+          const pCount = data.playerCount || (Array.isArray(data.playerUids) ? data.playerUids.length : 0);
+          if (pCount > 0) {
+            counts[fee] = (counts[fee] || 0) + pCount;
+          }
+        }
+      });
+      callback(counts);
+    };
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        latestSnapshot = snapshot;
+        computeAndEmitCounts();
+      },
+      (err) => {
+        console.warn('Error in subscribeLiveStakesPlayerCounts:', err);
+        callback({});
+      }
+    );
+
+    // Periodically re-check freshness every 10 seconds to auto-expire rooms > 90s without needing a remote write
+    const intervalId = setInterval(computeAndEmitCounts, 10000);
+
+    return () => {
+      unsubscribe();
+      clearInterval(intervalId);
+    };
+  } catch (err) {
+    console.warn('Failed to initialize subscribeLiveStakesPlayerCounts:', err);
+    callback({});
+    return () => {};
+  }
+}
+
+/**
  * Send real-time heartbeat to prove player is active and online
  */
 export async function sendPlayerHeartbeat(gameId: string, playerUid: string): Promise<void> {
   try {
-    const pRef = doc(db, 'games', gameId, 'players', playerUid);
     const nowIso = new Date().toISOString();
+    const pRef = doc(db, 'games', gameId, 'players', playerUid);
     await updateDoc(pRef, { lastSeen: nowIso, connected: true });
+    const gRef = doc(db, 'games', gameId);
+    await updateDoc(gRef, { updatedAt: nowIso });
   } catch {
     // ignore silent network blip
   }

@@ -367,6 +367,20 @@ export default function GameRoomPage() {
     return () => clearInterval(interval);
   }, [game?.status, game?.gameId, game?.createdAt, game?.waitingEndsAt, game?.isBoosted, user?.uid, !!myPlayer, isBoosted]);
 
+  // Heartbeat while in waiting room to keep table activity fresh in the Lobby
+  useEffect(() => {
+    if (!gameId || !user || !myPlayer || game?.status !== 'WAITING') return;
+    const hbInterval = setInterval(async () => {
+      try {
+        const gameRef = doc(db, 'games', gameId);
+        await updateDoc(gameRef, { updatedAt: new Date().toISOString() });
+      } catch {
+        // ignore background blip
+      }
+    }, 15000);
+    return () => clearInterval(hbInterval);
+  }, [gameId, user, !!myPlayer, game?.status]);
+
   // 4. Countdown timer handler — uses stable deps
   const countdownGameId = game?.gameId;
   const countdownStatus = game?.status;
