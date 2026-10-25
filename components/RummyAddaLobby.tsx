@@ -40,8 +40,6 @@ import {
   STAKE_OPTIONS,
   StakeOption,
   findMatch,
-  getLivePlayerCount,
-  getAllStakesPlayerCounts,
   createPracticeMatch,
 } from '@/lib/game-service';
 import { HowToPlayModal } from '@/components/HowToPlayModal';
@@ -65,9 +63,6 @@ export function RummyAddaLobby() {
   }, [format]);
 
   const [stakeIndex, setStakeIndex] = useState<number>(0);
-
-  // Real-time player counts per stake
-  const [stakePlayerCounts, setStakePlayerCounts] = useState<Record<number, number>>({});
   const [isLoadingMatch, setIsLoadingMatch] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -88,28 +83,6 @@ export function RummyAddaLobby() {
   const playableBalance = getPlayableBalance(wallet);
   const withdrawableBalance = getWithdrawableBalance(wallet);
   const redeemPoints = wallet?.rewardPoints !== undefined ? wallet.rewardPoints : (wallet?.bonusBalance !== undefined ? wallet.bonusBalance : 134.05);
-
-  // Poll live player counts every 12 seconds
-  useEffect(() => {
-    let isMounted = true;
-    const fetchCounts = async () => {
-      try {
-        const counts = await getAllStakesPlayerCounts(format, playerCount);
-        if (isMounted) {
-          setStakePlayerCounts(counts);
-        }
-      } catch (err) {
-        console.warn('Failed to fetch player counts:', err);
-      }
-    };
-
-    fetchCounts();
-    const interval = setInterval(fetchCounts, 12000);
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
-  }, [format, playerCount]);
 
   // Adjust stakeIndex when format changes
   useEffect(() => {
@@ -134,15 +107,6 @@ export function RummyAddaLobby() {
   const handlePlus = () => {
     setStakeIndex((prev) => Math.min(currentStakes.length - 1, prev + 1));
   };
-
-  // Live count for current selected entry fee
-  // If Firestore count > 0, show live count; else show a realistic online presence (e.g. 1) matching user reference
-  const currentLivePlayers = useMemo(() => {
-    const live = stakePlayerCounts[currentStake.entryFee];
-    if (typeof live === 'number' && live > 0) return live;
-    // Fallback baseline for table realism (e.g. 1 playing)
-    return currentStake.entryFee <= 160 ? 1 : 0;
-  }, [stakePlayerCounts, currentStake.entryFee]);
 
   // Play Now Action
   const handlePlayNow = async () => {
@@ -590,18 +554,12 @@ export function RummyAddaLobby() {
               </button>
             </div>
 
-            {/* Sub-details: Point Value & Live Playing Count */}
+            {/* Sub-details: Point Value */}
             <div className="space-y-1 pt-1">
               {/* Point Value */}
               <p className="text-xs sm:text-sm text-slate-200 font-semibold">
                 Point Value: {currentStake.pointValue}
               </p>
-
-              {/* Live Playing count for this stake */}
-              <div className="flex items-center justify-center gap-1.5 text-xs sm:text-sm font-extrabold text-[#22c55e]">
-                <span className="inline-block w-2 h-2 rounded-full bg-[#22c55e] animate-ping" />
-                <span>Playing {currentLivePlayers}</span>
-              </div>
 
               {/* Quick link to see all available player counts across stakes */}
               <button
@@ -609,7 +567,7 @@ export function RummyAddaLobby() {
                 onClick={() => setShowAllStakesModal(true)}
                 className="text-[11px] text-amber-400 hover:text-amber-300 underline font-semibold transition-colors mt-1"
               >
-                📊 View All Stakes &amp; Live Tables
+                📊 View All Stakes
               </button>
             </div>
           </div>
@@ -710,7 +668,7 @@ export function RummyAddaLobby() {
           <div className="bg-[#1a0205] border border-amber-500/50 rounded-3xl max-w-sm w-full p-5 space-y-4 shadow-2xl max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-white/10 pb-3">
               <div>
-                <h4 className="font-black text-base text-white">Live Stakes &amp; Players</h4>
+                <h4 className="font-black text-base text-white">All Stakes</h4>
                 <p className="text-[11px] text-slate-400">
                   {format.toUpperCase()} • {playerCount} Players Table
                 </p>
@@ -726,7 +684,6 @@ export function RummyAddaLobby() {
             <div className="space-y-2">
               {currentStakes.map((stake, idx) => {
                 const isSelected = idx === stakeIndex;
-                const liveCount = stakePlayerCounts[stake.entryFee] || (stake.entryFee <= 160 ? 1 : 0);
                 return (
                   <div
                     key={stake.entryFee}
@@ -751,10 +708,7 @@ export function RummyAddaLobby() {
                     </div>
 
                     <div className="text-right">
-                      <span className="text-xs font-black text-[#22c55e] block">
-                        Playing {liveCount}
-                      </span>
-                      <span className="text-[10px] text-slate-400">
+                      <span className="text-xs font-semibold text-slate-400">
                         {isSelected ? '✓ Selected' : 'Tap to Select'}
                       </span>
                     </div>
