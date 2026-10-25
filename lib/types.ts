@@ -184,6 +184,7 @@ export interface GameState {
   phase: GameStatus;
   countdownEndsAt?: string;
   waitingEndsAt?: string;
+  isBoosted?: boolean;
   dealerUid?: string;
   wildJoker?: Card;
   turnUid?: string;

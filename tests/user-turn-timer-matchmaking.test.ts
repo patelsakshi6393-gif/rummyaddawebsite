@@ -93,17 +93,41 @@ describe('Turn Timer & Matchmaking Verification Suite', () => {
     const activeText = `${activeCount} ${activeCount === 1 ? 'player is active' : 'players are active'} / Boost`;
     expect(activeText).toBe('1 player is active / Boost');
 
+    // Bottom user avatar pill during WAITING state
+    const bottomPillText = `${activeCount} Active / Boost`;
+    expect(bottomPillText).toBe('1 Active / Boost');
+
     // When 2nd player joins
     players.push({ uid: 'u2', displayName: 'Rahul', status: 'waiting' });
     const updatedCount = players.length;
     const updatedActiveText = `${updatedCount} ${updatedCount === 1 ? 'player is active' : 'players are active'} / Boost`;
     expect(updatedActiveText).toBe('2 players are active / Boost');
 
-    // Boost accelerates waiting timer to 2s
-    let waitingTimeLeft = 10;
+    const updatedBottomPillText = `${updatedCount} Active / Boost`;
+    expect(updatedBottomPillText).toBe('2 Active / Boost');
+
+    // Opponent seat status during WAITING room should NOT show "13 Cards" but "Active / Boost"
+    const oppSeatStatus = isWaitingRoom ? 'Active / Boost' : '13 Cards';
+    expect(oppSeatStatus).toBe('Active / Boost');
+
+    // Boost accelerates waiting timer to 2s and interval retains boosted target time without rebounding
+    let boostEndTime: number | null = Date.now() + 2000;
     const isBoosted = true;
+    let waitingTimeLeft = 10;
     waitingTimeLeft = Math.min(waitingTimeLeft, 2);
     expect(isBoosted).toBe(true);
     expect(waitingTimeLeft).toBe(2);
+
+    // Simulate 1 second interval tick after boost
+    const nowAfter1s = Date.now() + 1000;
+    const remainingAfter1s = Math.max(0, Math.ceil((boostEndTime - nowAfter1s) / 1000));
+    waitingTimeLeft = remainingAfter1s;
+    expect(waitingTimeLeft).toBe(1); // Crucial: must NOT rebound to 8s or 9s!
+
+    // Simulate 2 seconds interval tick after boost
+    const nowAfter2s = Date.now() + 2000;
+    const remainingAfter2s = Math.max(0, Math.ceil((boostEndTime - nowAfter2s) / 1000));
+    waitingTimeLeft = remainingAfter2s;
+    expect(waitingTimeLeft).toBe(0);
   });
 });

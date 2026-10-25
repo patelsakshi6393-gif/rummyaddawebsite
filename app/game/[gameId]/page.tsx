@@ -302,12 +302,24 @@ export default function GameRoomPage() {
   const [waitingTimeLeft, setWaitingTimeLeft] = useState<number>(10);
   const [isBoosted, setIsBoosted] = useState<boolean>(false);
   const autoMatchCalledRef = useRef(false);
+  const boostEndTimeRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!game || game.status !== 'WAITING' || !user || !myPlayer) return;
     autoMatchCalledRef.current = false;
 
+    // Sync isBoosted from game doc if set remotely on table or locally
+    if (game.isBoosted && !isBoosted) {
+      setIsBoosted(true);
+      if (!boostEndTimeRef.current) {
+        boostEndTimeRef.current = Date.now() + 2000;
+      }
+    }
+
     const getTargetTime = () => {
+      if (boostEndTimeRef.current) {
+        return boostEndTimeRef.current;
+      }
       if (game.waitingEndsAt) {
         return new Date(game.waitingEndsAt).getTime();
       }
@@ -324,6 +336,9 @@ export default function GameRoomPage() {
 
     const calculateWaitDiff = () => {
       const now = Date.now();
+      if (boostEndTimeRef.current) {
+        return Math.max(0, Math.ceil((boostEndTimeRef.current - now) / 1000));
+      }
       return Math.max(0, Math.ceil((targetTime - now) / 1000));
     };
 
@@ -350,7 +365,7 @@ export default function GameRoomPage() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [game?.status, game?.gameId, game?.createdAt, game?.waitingEndsAt, user?.uid, !!myPlayer]);
+  }, [game?.status, game?.gameId, game?.createdAt, game?.waitingEndsAt, game?.isBoosted, user?.uid, !!myPlayer, isBoosted]);
 
   // 4. Countdown timer handler — uses stable deps
   const countdownGameId = game?.gameId;
@@ -1205,6 +1220,8 @@ export default function GameRoomPage() {
             <span className="text-rose-400 font-bold">Eliminated</span>
           ) : isOppTurn ? (
             <span className="text-emerald-400 font-bold">Turn: {turnTimeLeft}s</span>
+          ) : isWaitingRoom ? (
+            <span className="text-emerald-400 font-bold">Active / Boost</span>
           ) : (
             <span>{opp.cardCount || 13} Cards</span>
           )}
@@ -1408,104 +1425,117 @@ export default function GameRoomPage() {
               */}
               <div className="flex-1 flex items-center justify-center gap-4 sm:gap-8 md:gap-12 relative z-20 my-auto py-1">
                 {/* WAITING ROOM (when waiting for players) */}
-                {game?.status === 'WAITING' && (
-                  <div className="bg-black/90 backdrop-blur-md border border-amber-500/40 px-5 sm:px-8 py-3 sm:py-4 rounded-2xl text-center space-y-2.5 shadow-2xl max-w-xs sm:max-w-sm w-full animate-in fade-in zoom-in-95 duration-200">
-                    <div className="flex flex-col items-center justify-center gap-1.5">
-                      {/* Active Player and Boost Indicator */}
-                      <div className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-black shadow-inner">
-                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0" />
-                        <span>
-                          {players.length || 1} {players.length === 1 || !players.length ? 'player is active' : 'players are active'}
-                        </span>
-                        <span className="text-amber-400 font-black">/ Boost</span>
+                {game?.status === 'WAITING' && (() => {
+                  const activePlayerCount = Math.max(1, players.length, game?.playerCount || 1);
+                  return (
+                    <div className="bg-black/90 backdrop-blur-md border border-amber-500/40 px-5 sm:px-8 py-3 sm:py-4 rounded-2xl text-center space-y-2.5 shadow-2xl max-w-xs sm:max-w-sm w-full animate-in fade-in zoom-in-95 duration-200">
+                      <div className="flex flex-col items-center justify-center gap-1.5">
+                        {/* Active Player and Boost Indicator */}
+                        <div className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-black shadow-inner">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0" />
+                          <span>
+                            {activePlayerCount} {activePlayerCount === 1 ? 'player is active' : 'players are active'}
+                          </span>
+                          <span className="text-amber-400 font-black">/ Boost</span>
+                        </div>
+
+                        <div className="flex items-center justify-center gap-2 text-amber-400">
+                          <Users className="w-3.5 h-3.5 animate-pulse" />
+                          <span className="font-extrabold text-[11px] uppercase tracking-wider">
+                            Matchmaking ({activePlayerCount}/{game?.maxPlayers || 2} Players)
+                          </span>
+                        </div>
                       </div>
 
-                      <div className="flex items-center justify-center gap-2 text-amber-400">
-                        <Users className="w-3.5 h-3.5 animate-pulse" />
-                        <span className="font-extrabold text-[11px] uppercase tracking-wider">
-                          Matchmaking ({players.length}/{game?.maxPlayers || 2} Players)
-                        </span>
+                      {/* Circular Countdown Timer */}
+                      <div className="py-1 flex flex-col items-center justify-center gap-1">
+                        <div className="w-12 h-12 flex items-center justify-center relative">
+                          <div className="absolute inset-0 rounded-full border-2 border-amber-400/30 border-t-amber-400 animate-spin" />
+                          <span className="font-mono font-black text-lg text-amber-300 relative z-10">
+                            {waitingTimeLeft > 0 ? waitingTimeLeft : '...'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-200 font-semibold mt-1">
+                          {isBoosted
+                            ? '⚡ Matchmaking Boosted! Searching priority queue...'
+                            : waitingTimeLeft > 0
+                            ? 'Searching for online players...'
+                            : 'Waiting for real players to join...'}
+                        </p>
+                        <p className="text-[10px] text-emerald-400 font-medium">
+                          100% Real Players Online • Zero Bots
+                        </p>
                       </div>
-                    </div>
 
-                    {/* Circular Countdown Timer */}
-                    <div className="py-1 flex flex-col items-center justify-center gap-1">
-                      <div className="w-12 h-12 flex items-center justify-center relative">
-                        <div className="absolute inset-0 rounded-full border-2 border-amber-400/30 border-t-amber-400 animate-spin" />
-                        <span className="font-mono font-black text-lg text-amber-300 relative z-10">
-                          {waitingTimeLeft > 0 ? waitingTimeLeft : '...'}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-200 font-semibold mt-1">
-                        {isBoosted
-                          ? '⚡ Matchmaking Boosted! Searching priority queue...'
-                          : waitingTimeLeft > 0
-                          ? 'Searching for online players...'
-                          : 'Waiting for real players to join...'}
-                      </p>
-                      <p className="text-[10px] text-emerald-400 font-medium">
-                        100% Real Players Online • Zero Bots
-                      </p>
-                    </div>
-
-                    {/* Boost Matchmaking Button */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsBoosted(true);
-                        try {
-                          soundManager.playTurnNotification();
-                        } catch {}
-                        setWaitingTimeLeft((prev) => Math.min(prev, 2));
-                        if (canInjectBotIntoGame(game) && user) {
-                          autoMatchWithBots(game.gameId, user.uid).catch((err) =>
-                            console.error('Boost auto-match error:', err)
-                          );
-                        }
-                      }}
-                      disabled={isBoosted}
-                      className={`w-full py-2 px-3 rounded-xl font-black text-xs transition-all cursor-pointer shadow-lg flex items-center justify-center gap-1.5 ${
-                        isBoosted
-                          ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white border border-emerald-400/50 shadow-emerald-500/20'
-                          : 'bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 hover:from-amber-400 hover:to-yellow-300 active:scale-95 text-slate-950 border border-amber-300 shadow-amber-500/30'
-                      }`}
-                    >
-                      <Zap className="w-3.5 h-3.5 fill-current text-current animate-pulse" />
-                      <span>
-                        {isBoosted
-                          ? '⚡ Boost Active • Fast Matching'
-                          : '⚡ Boost Matchmaking'}
-                      </span>
-                    </button>
-
-                    {/* Optional Practice Table Bot Match Button (STRICTLY restricted to practice tables, NEVER rendered on cash tables) */}
-                    {canInjectBotIntoGame(game) && !isBoosted && (
+                      {/* Boost Matchmaking Button */}
                       <button
                         type="button"
                         onClick={async () => {
-                          if (!user || !game) return;
+                          if (isBoosted || !game || !user) return;
+                          setIsBoosted(true);
+                          boostEndTimeRef.current = Date.now() + 2000;
+                          setWaitingTimeLeft(2);
                           try {
-                            await autoMatchWithBots(game.gameId, user.uid);
+                            soundManager.playTurnNotification();
+                          } catch {}
+                          try {
+                            await updateDoc(doc(db, 'games', game.gameId), {
+                              isBoosted: true,
+                              updatedAt: new Date().toISOString(),
+                            });
                           } catch (err) {
-                            console.error('Bot match error:', err);
+                            console.warn('Boost Firestore sync note:', err);
+                          }
+                          if (canInjectBotIntoGame(game)) {
+                            autoMatchWithBots(game.gameId, user.uid).catch((err) =>
+                              console.error('Boost auto-match error:', err)
+                            );
                           }
                         }}
-                        className="w-full py-1.5 px-3 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 font-bold text-[10px] border border-amber-500/30 transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                        disabled={isBoosted}
+                        className={`w-full py-2 px-3 rounded-xl font-black text-xs transition-all cursor-pointer shadow-lg flex items-center justify-center gap-1.5 ${
+                          isBoosted
+                            ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white border border-emerald-400/50 shadow-emerald-500/20'
+                            : 'bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 hover:from-amber-400 hover:to-yellow-300 active:scale-95 text-slate-950 border border-amber-300 shadow-amber-500/30'
+                        }`}
                       >
-                        <span>🤖 Add AI Opponent (Practice Mode)</span>
+                        <Zap className="w-3.5 h-3.5 fill-current text-current animate-pulse" />
+                        <span>
+                          {isBoosted
+                            ? '⚡ Boost Active • Fast Matching'
+                            : '⚡ Boost Matchmaking'}
+                        </span>
                       </button>
-                    )}
 
-                    <button
-                      type="button"
-                      onClick={handleLeaveQueue}
-                      disabled={leavingQueue}
-                      className="w-full py-2 px-3 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 font-bold text-xs border border-rose-500/30 transition-colors cursor-pointer shadow-md"
-                    >
-                      {leavingQueue ? 'Refunding...' : 'Cancel Table (Full Refund)'}
-                    </button>
-                  </div>
-                )}
+                      {/* Optional Practice Table Bot Match Button (STRICTLY restricted to practice tables, NEVER rendered on cash tables) */}
+                      {canInjectBotIntoGame(game) && !isBoosted && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!user || !game) return;
+                            try {
+                              await autoMatchWithBots(game.gameId, user.uid);
+                            } catch (err) {
+                              console.error('Bot match error:', err);
+                            }
+                          }}
+                          className="w-full py-1.5 px-3 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 font-bold text-[10px] border border-amber-500/30 transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                        >
+                          <span>🤖 Add AI Opponent (Practice Mode)</span>
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={handleLeaveQueue}
+                        disabled={leavingQueue}
+                        className="w-full py-2 px-3 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 font-bold text-xs border border-rose-500/30 transition-colors cursor-pointer shadow-md"
+                      >
+                        {leavingQueue ? 'Refunding...' : 'Cancel Table (Full Refund)'}
+                      </button>
+                    </div>
+                  );
+                })()}
 
                 {/* 15-SECOND SYNCHRONIZED COUNTDOWN */}
                 {game?.status === 'COUNTDOWN' && (
@@ -1966,7 +1996,9 @@ export default function GameRoomPage() {
                   {isMyTurn ? (
                     <span className="text-emerald-400 font-bold">Your Turn</span>
                   ) : game?.status === 'WAITING' ? (
-                    <span className="text-emerald-400 font-bold">1 Active / Boost</span>
+                    <span className="text-emerald-400 font-bold">
+                      {Math.max(1, players.length, game?.playerCount || 1)} Active / Boost
+                    </span>
                   ) : (
                     ((wallet?.depositBalance || 0) + (wallet?.winBalance || 0) + (wallet?.bonusBalance || 0) || 100000).toLocaleString()
                   )}

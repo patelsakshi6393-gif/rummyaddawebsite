@@ -573,8 +573,14 @@ export function RummyAddaLobby() {
             </div>
           </div>
 
-          {/* PLAY NOW Button */}
-          <div className="pt-2 flex justify-center">
+          {/* PLAY NOW Button & Active Waiting Status */}
+          <div className="pt-2 flex flex-col items-center justify-center gap-2">
+            {isLoadingMatch && (
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold animate-pulse">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                <span>1 player is active / Boost</span>
+              </div>
+            )}
             <button
               type="button"
               onClick={handlePlayNow}
