@@ -77,6 +77,7 @@ import {
   Bot,
   Play,
   LogOut,
+  Zap,
 } from 'lucide-react';
 import { HowToPlayModal } from '@/components/HowToPlayModal';
 
@@ -299,6 +300,7 @@ export default function GameRoomPage() {
   // 3.5. Waiting countdown timer (10s) and auto-matchmaking handler
   // "ek waiting time rakho usme agar players nhi aye to matchmaking ho jayega timer chalega or game start"
   const [waitingTimeLeft, setWaitingTimeLeft] = useState<number>(10);
+  const [isBoosted, setIsBoosted] = useState<boolean>(false);
   const autoMatchCalledRef = useRef(false);
 
   useEffect(() => {
@@ -1408,11 +1410,22 @@ export default function GameRoomPage() {
                 {/* WAITING ROOM (when waiting for players) */}
                 {game?.status === 'WAITING' && (
                   <div className="bg-black/90 backdrop-blur-md border border-amber-500/40 px-5 sm:px-8 py-3 sm:py-4 rounded-2xl text-center space-y-2.5 shadow-2xl max-w-xs sm:max-w-sm w-full animate-in fade-in zoom-in-95 duration-200">
-                    <div className="flex items-center justify-center gap-2 text-amber-400">
-                      <Users className="w-4 h-4 animate-pulse" />
-                      <span className="font-extrabold text-xs uppercase tracking-wider">
-                        Matchmaking ({players.length}/{game?.maxPlayers || 2} Players)
-                      </span>
+                    <div className="flex flex-col items-center justify-center gap-1.5">
+                      {/* Active Player and Boost Indicator */}
+                      <div className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-black shadow-inner">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0" />
+                        <span>
+                          {players.length || 1} {players.length === 1 || !players.length ? 'player is active' : 'players are active'}
+                        </span>
+                        <span className="text-amber-400 font-black">/ Boost</span>
+                      </div>
+
+                      <div className="flex items-center justify-center gap-2 text-amber-400">
+                        <Users className="w-3.5 h-3.5 animate-pulse" />
+                        <span className="font-extrabold text-[11px] uppercase tracking-wider">
+                          Matchmaking ({players.length}/{game?.maxPlayers || 2} Players)
+                        </span>
+                      </div>
                     </div>
 
                     {/* Circular Countdown Timer */}
@@ -1424,15 +1437,49 @@ export default function GameRoomPage() {
                         </span>
                       </div>
                       <p className="text-[11px] text-slate-200 font-semibold mt-1">
-                        {waitingTimeLeft > 0 ? 'Searching for online players...' : 'Waiting for real players to join...'}
+                        {isBoosted
+                          ? '⚡ Matchmaking Boosted! Searching priority queue...'
+                          : waitingTimeLeft > 0
+                          ? 'Searching for online players...'
+                          : 'Waiting for real players to join...'}
                       </p>
                       <p className="text-[10px] text-emerald-400 font-medium">
                         100% Real Players Online • Zero Bots
                       </p>
                     </div>
 
+                    {/* Boost Matchmaking Button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsBoosted(true);
+                        try {
+                          soundManager.playTurnNotification();
+                        } catch {}
+                        setWaitingTimeLeft((prev) => Math.min(prev, 2));
+                        if (canInjectBotIntoGame(game) && user) {
+                          autoMatchWithBots(game.gameId, user.uid).catch((err) =>
+                            console.error('Boost auto-match error:', err)
+                          );
+                        }
+                      }}
+                      disabled={isBoosted}
+                      className={`w-full py-2 px-3 rounded-xl font-black text-xs transition-all cursor-pointer shadow-lg flex items-center justify-center gap-1.5 ${
+                        isBoosted
+                          ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white border border-emerald-400/50 shadow-emerald-500/20'
+                          : 'bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 hover:from-amber-400 hover:to-yellow-300 active:scale-95 text-slate-950 border border-amber-300 shadow-amber-500/30'
+                      }`}
+                    >
+                      <Zap className="w-3.5 h-3.5 fill-current text-current animate-pulse" />
+                      <span>
+                        {isBoosted
+                          ? '⚡ Boost Active • Fast Matching'
+                          : '⚡ Boost Matchmaking'}
+                      </span>
+                    </button>
+
                     {/* Optional Practice Table Bot Match Button (STRICTLY restricted to practice tables, NEVER rendered on cash tables) */}
-                    {canInjectBotIntoGame(game) && (
+                    {canInjectBotIntoGame(game) && !isBoosted && (
                       <button
                         type="button"
                         onClick={async () => {
@@ -1918,6 +1965,8 @@ export default function GameRoomPage() {
                 <span className="block text-[7px] sm:text-[9px] font-mono text-white/80 leading-tight truncate">
                   {isMyTurn ? (
                     <span className="text-emerald-400 font-bold">Your Turn</span>
+                  ) : game?.status === 'WAITING' ? (
+                    <span className="text-emerald-400 font-bold">1 Active / Boost</span>
                   ) : (
                     ((wallet?.depositBalance || 0) + (wallet?.winBalance || 0) + (wallet?.bonusBalance || 0) || 100000).toLocaleString()
                   )}

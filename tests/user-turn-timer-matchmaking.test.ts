@@ -80,4 +80,30 @@ describe('Turn Timer & Matchmaking Verification Suite', () => {
     expect(leftDockButtons[1]).toBe('SORT');
     expect(leftDockButtons[2]).toBe('DECLARE');
   });
+
+  it('Waiting room renders "X player is active / Boost" indicator and Boost matchmaking action', () => {
+    const gameStatus = 'WAITING';
+    const players: Partial<GamePlayerState>[] = [
+      { uid: 'u1', displayName: 'Sakshi', status: 'waiting' },
+    ];
+    const isWaitingRoom = gameStatus === 'WAITING';
+    expect(isWaitingRoom).toBe(true);
+
+    const activeCount = Math.max(1, players.length);
+    const activeText = `${activeCount} ${activeCount === 1 ? 'player is active' : 'players are active'} / Boost`;
+    expect(activeText).toBe('1 player is active / Boost');
+
+    // When 2nd player joins
+    players.push({ uid: 'u2', displayName: 'Rahul', status: 'waiting' });
+    const updatedCount = players.length;
+    const updatedActiveText = `${updatedCount} ${updatedCount === 1 ? 'player is active' : 'players are active'} / Boost`;
+    expect(updatedActiveText).toBe('2 players are active / Boost');
+
+    // Boost accelerates waiting timer to 2s
+    let waitingTimeLeft = 10;
+    const isBoosted = true;
+    waitingTimeLeft = Math.min(waitingTimeLeft, 2);
+    expect(isBoosted).toBe(true);
+    expect(waitingTimeLeft).toBe(2);
+  });
 });

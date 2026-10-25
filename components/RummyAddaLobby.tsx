@@ -17,6 +17,7 @@ import {
   Plus,
   Play,
   Sparkles,
+  Loader2,
   Megaphone,
   Gamepad2,
   Layers,
@@ -581,7 +582,10 @@ export function RummyAddaLobby() {
               className="w-full max-w-xs py-3.5 px-8 rounded-full bg-gradient-to-b from-[#ffe082] via-[#f5b027] to-[#d88900] hover:from-[#ffeb99] hover:to-[#e59400] active:scale-95 text-slate-950 font-black text-base sm:text-lg tracking-wider uppercase shadow-xl shadow-amber-500/30 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
             >
               {isLoadingMatch ? (
-                <span>Joining Table...</span>
+                <span className="flex items-center gap-2">
+                  <Loader2 className="w-5 h-5 animate-spin text-black" />
+                  <span>1 Player is active / Boost...</span>
+                </span>
               ) : (
                 <span>PLAY NOW</span>
               )}
