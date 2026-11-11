@@ -38,6 +38,11 @@ export interface UserProfile {
   role: 'player' | 'admin' | 'support';
   accountStatus: 'active' | 'suspended' | 'verified';
   activeGameId?: string | null;
+  matchesPlayed?: number;
+  matchesWon?: number;
+  matchesLost?: number;
+  winRate?: number;
+  lastMatchResult?: 'win' | 'loss';
   createdAt: string;
   updatedAt?: string;
 }

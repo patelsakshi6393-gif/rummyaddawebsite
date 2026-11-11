@@ -1,6 +1,6 @@
 import { Card } from '../lib/types';
 import { describe, it, expect } from 'bun:test';
-import { STAKE_OPTIONS, StakeOption, canInjectBotIntoGame } from '../lib/game-service';
+import { STAKE_OPTIONS, StakeOption, canInjectBotIntoGame, determineBotSkillLevel } from '../lib/game-service';
 import { calculateLiveHandScore, validateDeclaration, isJokerCard } from '../lib/rummy-engine';
 import { GameState } from '../lib/types';
 
@@ -88,6 +88,31 @@ describe('Lobby Entry Fee, 2/6 Players & Zero-Bot Cash Policy Suite', () => {
     expect(canInjectBotIntoGame(undefined)).toBe(false);
   });
 
+
+  it('Dynamic Bot Difficulty scales according to user match count and win rate', () => {
+    // Match 1: First match is beginner level so newcomer learns and wins comfortably
+    expect(determineBotSkillLevel(0, 0)).toBe('beginner');
+    expect(determineBotSkillLevel(0, 50)).toBe('beginner');
+
+    // Match 2: Second match is intermediate level (solid challenge)
+    expect(determineBotSkillLevel(1, 100)).toBe('intermediate');
+    expect(determineBotSkillLevel(1, 0)).toBe('intermediate');
+
+    // Match 3+: Skill-based progression based on win rate
+    // Skilled user (win rate >= 60%) -> Expert (sharp, fast declarations)
+    expect(determineBotSkillLevel(2, 100)).toBe('expert');
+    expect(determineBotSkillLevel(5, 80)).toBe('expert');
+    expect(determineBotSkillLevel(10, 60)).toBe('expert');
+
+    // Struggling user (win rate < 40%) -> Beginner (relaxed, allows user to win)
+    expect(determineBotSkillLevel(2, 0)).toBe('beginner');
+    expect(determineBotSkillLevel(5, 20)).toBe('beginner');
+    expect(determineBotSkillLevel(10, 30)).toBe('beginner');
+
+    // Balanced user (win rate 40% - 59%) -> Intermediate
+    expect(determineBotSkillLevel(2, 50)).toBe('intermediate');
+    expect(determineBotSkillLevel(10, 50)).toBe('intermediate');
+  });
   it('Bot smart card evaluation optimizes melds and can declare a winning hand', () => {
     const wildJokerRank = '7';
 

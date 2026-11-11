@@ -1760,6 +1760,62 @@ export async function autoMatchWithBots(gameId: string, currentUserUid: string):
 }
 
 /**
+ * Dynamic Difficulty Adjustment (DDA) for AI opponent:
+ * - Match 1: Beginner (plays suboptimal, delays declaration so user wins comfortably)
+ * - Match 2: Intermediate (plays solid, balanced challenge)
+ * - Match 3+: Skill-based adaptive AI based on user win rate:
+ *     - Win rate >= 60%: Expert (master-level play, fast 0-score declarations)
+ *     - Win rate < 40%: Beginner (relaxed, allows user to win matches)
+ *     - Win rate 40-59%: Intermediate (balanced competitive play)
+ */
+export type BotSkillLevel = 'beginner' | 'intermediate' | 'expert';
+
+export function determineBotSkillLevel(
+  matchesPlayed: number = 0,
+  winRate: number = 50,
+  lastMatchResult?: 'win' | 'loss'
+): BotSkillLevel {
+  if (matchesPlayed === 0) return 'beginner';
+  if (matchesPlayed === 1) return 'intermediate';
+  if (winRate >= 60) return 'expert';
+  if (winRate < 40) return 'beginner';
+  return 'intermediate';
+}
+
+/**
+ * Record match result on user profile to power skill progression and statistics
+ */
+export async function updateUserMatchStats(
+  playerUid: string,
+  isWinner: boolean
+): Promise<void> {
+  if (!playerUid || playerUid.startsWith('bot_')) return;
+  try {
+    const uRef = doc(db, 'users', playerUid);
+    const uSnap = await getDoc(uRef);
+    if (uSnap.exists()) {
+      const uData = uSnap.data() as UserProfile;
+      const prevPlayed = typeof uData.matchesPlayed === 'number' ? uData.matchesPlayed : 0;
+      const prevWon = typeof uData.matchesWon === 'number' ? uData.matchesWon : 0;
+      const newPlayed = prevPlayed + 1;
+      const newWon = isWinner ? prevWon + 1 : prevWon;
+      const newWinRate = Math.round((newWon / newPlayed) * 100);
+
+      await updateDoc(uRef, {
+        matchesPlayed: newPlayed,
+        matchesWon: newWon,
+        matchesLost: newPlayed - newWon,
+        winRate: newWinRate,
+        lastMatchResult: isWinner ? 'win' : 'loss',
+        updatedAt: new Date().toISOString(),
+      });
+    }
+  } catch (err) {
+    console.warn('[GameService] Error updating user match stats:', err);
+  }
+}
+
+/**
  * Automated turn for Practice Bot
  */
 export async function playBotTurn(gameId: string, botUid: string): Promise<void> {
@@ -1798,6 +1854,30 @@ export async function playBotTurn(gameId: string, botUid: string): Promise<void>
       ...playerSnaps.filter((s) => s.exists()).map((s) => s.data() as GamePlayerState),
     ];
 
+    // Read human player profile to determine dynamic bot difficulty
+    const humanPlayer = playerDocs.find((p) => p.uid !== botUid && !p.isBot && !p.uid.startsWith('bot_'));
+    let humanMatchesPlayed = 0;
+    let humanWinRate = 50;
+    let humanLastResult: 'win' | 'loss' | undefined = undefined;
+
+    if (humanPlayer) {
+      try {
+        const userDocRef = doc(db, 'users', humanPlayer.uid);
+        const userDocSnap = await tx.get(userDocRef);
+        if (userDocSnap.exists()) {
+          const uData = userDocSnap.data() as UserProfile;
+          humanMatchesPlayed = typeof uData.matchesPlayed === 'number' ? uData.matchesPlayed : 0;
+          const won = typeof uData.matchesWon === 'number' ? uData.matchesWon : 0;
+          humanWinRate = humanMatchesPlayed > 0 ? Math.round((won / humanMatchesPlayed) * 100) : 50;
+          humanLastResult = uData.lastMatchResult;
+        }
+      } catch (err) {
+        console.warn('[BotAI] Could not read user profile for adaptive difficulty:', err);
+      }
+    }
+
+    const botSkill = determineBotSkillLevel(humanMatchesPlayed, humanWinRate, humanLastResult);
+
     // 2. BOT CARDS SETUP
     let closedDeck: Card[] = [];
     if (deckSnap && deckSnap.exists()) {
@@ -1826,28 +1906,39 @@ export async function playBotTurn(gameId: string, botUid: string): Promise<void>
     const botTurns = ((botData as any).turnsCount || 0) + 1;
 
     // 3. SMART CARD DRAW DECISION:
-    // Determine whether to pick topOpenCard or draw from closedDeck
+    // Adaptive card draw behavior based on user skill progression
     let drawnCard: Card;
     let drewFromOpen = false;
 
     if (topOpenCard) {
       const isTopJoker = isJokerCard(topOpenCard, wildJokerRank);
-      if (isTopJoker) {
-        // Jokers are always top priority!
+      if (isTopJoker && botSkill !== 'beginner') {
+        // Intermediate & Expert always pick Jokers from open deck
         drewFromOpen = true;
-      } else {
-        // Test if topOpenCard improves hand
+      } else if (botSkill === 'expert') {
+        // Expert evaluates if topOpenCard improves hand score
         const testHand = [...botHand, topOpenCard];
         let bestTestScore = 999;
         for (let i = 0; i < testHand.length; i++) {
           if (isJokerCard(testHand[i], wildJokerRank)) continue;
           const rem = testHand.filter((_, idx) => idx !== i);
           const score = calculateLossPoints(rem, wildJokerRank);
-          if (score < bestTestScore) {
-            bestTestScore = score;
-          }
+          if (score < bestTestScore) bestTestScore = score;
         }
         if (bestTestScore < currentScore) {
+          drewFromOpen = true;
+        }
+      } else if (botSkill === 'intermediate') {
+        // Intermediate draws from open if significant improvement (score reduction > 5)
+        const testHand = [...botHand, topOpenCard];
+        let bestTestScore = 999;
+        for (let i = 0; i < testHand.length; i++) {
+          if (isJokerCard(testHand[i], wildJokerRank)) continue;
+          const rem = testHand.filter((_, idx) => idx !== i);
+          const score = calculateLossPoints(rem, wildJokerRank);
+          if (score < bestTestScore) bestTestScore = score;
+        }
+        if (bestTestScore <= currentScore - 6) {
           drewFromOpen = true;
         }
       }
@@ -1856,43 +1947,64 @@ export async function playBotTurn(gameId: string, botUid: string): Promise<void>
     if (drewFromOpen) {
       drawnCard = newOpenDeck.pop()!;
     } else {
-      // Draw from closed deck:
-      // High-priority: Check if any card in closedDeck can produce a WIN (0 score) starting on Turn >= 3
       let smartCardIdx = -1;
-      if (botTurns >= 3) {
-        for (let i = closedDeck.length - 1; i >= 0; i--) {
-          const testCard = closedDeck[i];
-          const test14 = [...botHand, testCard];
-          for (let j = 0; j < test14.length; j++) {
-            if (isJokerCard(test14[j], wildJokerRank)) continue;
-            const rem13 = test14.filter((_, idx) => idx !== j);
-            const evalRes = calculateLiveHandScore(findBestMelds(rem13, wildJokerRank), wildJokerRank);
-            if (evalRes.score === 0 && evalRes.isWinningHand) {
-              smartCardIdx = i;
-              break;
-            }
-          }
-          if (smartCardIdx !== -1) break;
-        }
-      }
 
-      // Priority 2: Score reduction starting on Turn >= 2 (seize cards that reduce score by 3+ points)
-      if (smartCardIdx === -1 && botTurns >= 2 && currentScore > 10) {
-        for (let i = closedDeck.length - 1; i >= 0; i--) {
-          const testCard = closedDeck[i];
-          const test14 = [...botHand, testCard];
-          for (let j = 0; j < test14.length; j++) {
-            if (isJokerCard(test14[j], wildJokerRank)) continue;
-            const rem13 = test14.filter((_, idx) => idx !== j);
-            const score = calculateLossPoints(rem13, wildJokerRank);
-            if (score < currentScore - 3) {
-              smartCardIdx = i;
-              break;
+      if (botSkill === 'expert') {
+        // Expert: Check if any card in closedDeck can produce a WIN (0 score) starting on Turn >= 3
+        if (botTurns >= 3) {
+          for (let i = closedDeck.length - 1; i >= 0; i--) {
+            const testCard = closedDeck[i];
+            const test14 = [...botHand, testCard];
+            for (let j = 0; j < test14.length; j++) {
+              if (isJokerCard(test14[j], wildJokerRank)) continue;
+              const rem13 = test14.filter((_, idx) => idx !== j);
+              const evalRes = calculateLiveHandScore(findBestMelds(rem13, wildJokerRank), wildJokerRank);
+              if (evalRes.score === 0 && evalRes.isWinningHand) {
+                smartCardIdx = i;
+                break;
+              }
             }
+            if (smartCardIdx !== -1) break;
           }
-          if (smartCardIdx !== -1) break;
+        }
+
+        // Expert: Score reduction starting on Turn >= 2 (seize cards that reduce score by 3+ points)
+        if (smartCardIdx === -1 && botTurns >= 2 && currentScore > 10) {
+          for (let i = closedDeck.length - 1; i >= 0; i--) {
+            const testCard = closedDeck[i];
+            const test14 = [...botHand, testCard];
+            for (let j = 0; j < test14.length; j++) {
+              if (isJokerCard(test14[j], wildJokerRank)) continue;
+              const rem13 = test14.filter((_, idx) => idx !== j);
+              const score = calculateLossPoints(rem13, wildJokerRank);
+              if (score < currentScore - 3) {
+                smartCardIdx = i;
+                break;
+              }
+            }
+            if (smartCardIdx !== -1) break;
+          }
+        }
+      } else if (botSkill === 'intermediate') {
+        // Intermediate: Check for winning card on Turn >= 6
+        if (botTurns >= 6) {
+          for (let i = closedDeck.length - 1; i >= 0; i--) {
+            const testCard = closedDeck[i];
+            const test14 = [...botHand, testCard];
+            for (let j = 0; j < test14.length; j++) {
+              if (isJokerCard(test14[j], wildJokerRank)) continue;
+              const rem13 = test14.filter((_, idx) => idx !== j);
+              const evalRes = calculateLiveHandScore(findBestMelds(rem13, wildJokerRank), wildJokerRank);
+              if (evalRes.score === 0 && evalRes.isWinningHand) {
+                smartCardIdx = i;
+                break;
+              }
+            }
+            if (smartCardIdx !== -1) break;
+          }
         }
       }
+      // Beginner: Never searches closed deck for secret cards; draws natural random card
 
       if (smartCardIdx !== -1) {
         drawnCard = closedDeck.splice(smartCardIdx, 1)[0];
@@ -1944,7 +2056,24 @@ export async function playBotTurn(gameId: string, botUid: string): Promise<void>
 
     // Check if bot has reached a valid winning hand (0 score)
     const finalEval = calculateLiveHandScore(bestMelds, wildJokerRank);
-    const isBotWinner = finalEval.score === 0 || finalEval.isWinningHand;
+    let isBotWinner = false;
+
+    if (finalEval.score === 0 && finalEval.isWinningHand) {
+      if (botSkill === 'expert') {
+        // Expert declares immediately
+        isBotWinner = true;
+      } else if (botSkill === 'intermediate') {
+        // Intermediate declares on Turn >= 6
+        if (botTurns >= 6) {
+          isBotWinner = true;
+        }
+      } else {
+        // Beginner: Holds declaration until Turn >= 12 to let newcomer human player win comfortably
+        if (botTurns >= 12) {
+          isBotWinner = true;
+        }
+      }
+    }
 
     if (isBotWinner) {
       winningDeclarationMelds = bestMelds;
@@ -2339,6 +2468,13 @@ export async function handleTurnTimeout(gameId: string, currentTurnUid: string, 
           },
           updatedAt: new Date().toISOString(),
         });
+
+        if (winner && !winner.isBot && !winner.uid.startsWith('bot_')) {
+          updateUserMatchStats(winner.uid, true).catch(() => {});
+        }
+        if (!currentTurnUid.startsWith('bot_')) {
+          updateUserMatchStats(currentTurnUid, false).catch(() => {});
+        }
 
         return {
           winnerUid: winner.uid,
@@ -2793,6 +2929,15 @@ export async function declareHand(
         winnerPlayer?.deductionBreakdown,
         totalWinnerPoints
       );
+    }
+
+    // Update match stats for human players
+    for (const p of allPlayers) {
+      if (!p.isBot && !p.uid.startsWith('bot_')) {
+        updateUserMatchStats(p.uid, p.uid === playerUid).catch((e) =>
+          console.warn('User match stats update note:', e)
+        );
+      }
     }
 
     // Settle money for all losers:
