@@ -1535,7 +1535,7 @@ export default function GameRoomPage() {
                           }}
                           className="w-full py-1.5 px-3 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 font-bold text-[10px] border border-amber-500/30 transition-colors cursor-pointer flex items-center justify-center gap-1.5"
                         >
-                          <span>🤖 Add AI Opponent (Practice Mode)</span>
+                          <span>🤖 Add AI Opponent</span>
                         </button>
                       )}
 

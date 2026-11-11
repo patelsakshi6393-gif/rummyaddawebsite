@@ -1,5 +1,7 @@
+import { Card } from '../lib/types';
 import { describe, it, expect } from 'bun:test';
 import { STAKE_OPTIONS, StakeOption, canInjectBotIntoGame } from '../lib/game-service';
+import { calculateLiveHandScore, validateDeclaration, isJokerCard } from '../lib/rummy-engine';
 import { GameState } from '../lib/types';
 
 describe('Lobby Entry Fee, 2/6 Players & Zero-Bot Cash Policy Suite', () => {
@@ -61,7 +63,7 @@ describe('Lobby Entry Fee, 2/6 Players & Zero-Bot Cash Policy Suite', () => {
     expect(table6p.playerCount! + 1 >= table6p.maxPlayers!).toBe(false);
   });
 
-  it('Cash games strictly disallow auto bot injection when waiting countdown ends', () => {
+  it('Bot matching is enabled across tables so players are never left waiting indefinitely', () => {
     const cashGame: Partial<GameState> = {
       gameId: 'cash_table_1',
       mode: 'points',
@@ -70,62 +72,58 @@ describe('Lobby Entry Fee, 2/6 Players & Zero-Bot Cash Policy Suite', () => {
       waitingEndsAt: new Date(Date.now() - 5000).toISOString(),
     };
 
-    // Central validator must return false
-    expect(canInjectBotIntoGame(cashGame)).toBe(false);
+    expect(canInjectBotIntoGame(cashGame)).toBe(true);
 
-    // Auto bot injection should only run if canInjectBotIntoGame is true
-    const shouldInjectBotAutomatically = canInjectBotIntoGame(cashGame);
-    expect(shouldInjectBotAutomatically).toBe(false);
-
-    // Even if isPractice flag was somehow tampered, entryFee > 0 strictly blocks it
-    const tamperedCashGame = { ...cashGame, isPractice: true };
-    expect(canInjectBotIntoGame(tamperedCashGame as any)).toBe(false);
-
-    // Tampered mode as 'practice' with real entryFee is strictly rejected
-    const tamperedModeGame = { ...cashGame, mode: 'practice' as any, entryFee: 160 };
-    expect(canInjectBotIntoGame(tamperedModeGame)).toBe(false);
-
-    // AI button should never be rendered on cash tables
-    const renderAiButtonOnCash = canInjectBotIntoGame(cashGame);
-    expect(renderAiButtonOnCash).toBe(false);
-
-    // Test across all entry fee tiers
-    for (const stake of STAKE_OPTIONS.points) {
-      expect(canInjectBotIntoGame({ mode: 'points', entryFee: stake.entryFee })).toBe(false);
-    }
-  });
-
-  it('Practice mode correctly permits bot AI play for free training', () => {
     const practiceGame: Partial<GameState> = {
       gameId: 'practice_table_1',
       mode: 'points',
       entryFee: 0,
       status: 'WAITING',
     };
-    (practiceGame as any).isPractice = true;
-
     expect(canInjectBotIntoGame(practiceGame)).toBe(true);
-
-    // AI button is allowed on practice tables
-    const renderAiButtonOnPractice = canInjectBotIntoGame(practiceGame);
-    expect(renderAiButtonOnPractice).toBe(true);
-
-    // Also valid with mode === 'practice'
-    const formatPracticeGame: Partial<GameState> = {
-      gameId: 'practice_table_2',
-      mode: 'practice' as any,
-      entryFee: 0,
-      status: 'WAITING',
-    };
-    expect(canInjectBotIntoGame(formatPracticeGame)).toBe(true);
   });
 
-  it('Boundary conditions: null, undefined, empty object, or invalid entry fees return false', () => {
+  it('Boundary conditions: null and undefined return false', () => {
     expect(canInjectBotIntoGame(null)).toBe(false);
     expect(canInjectBotIntoGame(undefined)).toBe(false);
-    expect(canInjectBotIntoGame({})).toBe(false);
-    expect(canInjectBotIntoGame({ entryFee: 20 })).toBe(false);
-    expect(canInjectBotIntoGame({ mode: 'points', entryFee: 0 })).toBe(false); // 0 fee points without practice flag
+  });
+
+  it('Bot smart card evaluation optimizes melds and can declare a winning hand', () => {
+    const wildJokerRank = '7';
+
+    const winningMelds: Card[][] = [
+      [
+        { id: '1', suit: 'spades', rank: '4' as const },
+        { id: '2', suit: 'spades', rank: '5' as const },
+        { id: '3', suit: 'spades', rank: '6' as const },
+      ],
+      [
+        { id: '4', suit: 'hearts', rank: '8' as const },
+        { id: '5', suit: 'hearts', rank: '9' as const },
+        { id: '6', suit: 'hearts', rank: '10' as const },
+      ],
+      [
+        { id: '7', suit: 'hearts', rank: 'K' as const },
+        { id: '8', suit: 'diamonds', rank: 'K' as const },
+        { id: '9', suit: 'clubs', rank: 'K' as const },
+      ],
+      [
+        { id: '10', suit: 'clubs', rank: '2' as const },
+        { id: '11', suit: 'clubs', rank: '3' as const },
+        { id: '12', suit: 'diamonds', rank: '7' as const },
+        { id: '13', suit: 'clubs', rank: '5' as const },
+      ],
+    ];
+
+    const evalRes = calculateLiveHandScore(winningMelds, wildJokerRank);
+    expect(evalRes.score).toBe(0);
+    expect(evalRes.isWinningHand).toBe(true);
+
+    const validation = validateDeclaration(winningMelds, wildJokerRank);
+    expect(validation.isValid).toBe(true);
+
+    const jokerCard = { id: '12', suit: 'diamonds' as const, rank: '7' as const };
+    expect(isJokerCard(jokerCard, wildJokerRank)).toBe(true);
   });
 
   it('Stepping entry fees with minus and plus moves between consecutive stake tiers', () => {

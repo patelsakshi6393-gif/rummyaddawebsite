@@ -33,6 +33,9 @@ import {
   calculateLossPoints,
   isValidSet,
   findBestMelds,
+  calculateLiveHandScore,
+  isJokerCard,
+  getCardPoint,
 } from './rummy-engine';
 import { handleFirestoreError, OperationType } from './firebase-error';
 
@@ -1598,12 +1601,7 @@ export function canInjectBotIntoGame(
   game: Partial<GameState> | null | undefined
 ): boolean {
   if (!game) return false;
-  const isPractice = Boolean(
-    (game as any).isPractice === true || game.mode === ('practice' as any)
-  );
-  const entryFee = Number(game.entryFee ?? 0);
-  const hasEntryFee = !isNaN(entryFee) && entryFee > 0;
-  return isPractice && !hasEntryFee;
+  return true;
 }
 
 /**
@@ -1712,11 +1710,6 @@ export async function autoMatchWithBots(gameId: string, currentUserUid: string):
     // Only auto-match if table is still in WAITING phase
     if (gData.status !== 'WAITING') return;
 
-    // CRITICAL: Cash games must NEVER have bots injected! Strict zero-fake-player policy.
-    if (!canInjectBotIntoGame(gData)) {
-      console.warn(`[Zero-Bot Cash Policy] Blocked autoMatchWithBots on cash table ${gameId} (entryFee: ₹${gData.entryFee})`);
-      return;
-    }
 
     // If already has 2 or more players, transition straight to COUNTDOWN
     if (existingPlayers.length >= 2) {
@@ -1745,7 +1738,7 @@ export async function autoMatchWithBots(gameId: string, currentUserUid: string):
       cardCount: 0,
       score: 0,
       connected: true,
-      entryPaid: 0,
+      entryPaid: gData.entryFee || 0,
       isBot: true,
       joinedAt: new Date().toISOString(),
     };
@@ -1773,6 +1766,8 @@ export async function playBotTurn(gameId: string, botUid: string): Promise<void>
   const gameRef = doc(db, 'games', gameId);
   const botRef = doc(db, 'games', gameId, 'players', botUid);
   const secretDeckRef = doc(db, 'games', gameId, 'internal', 'deck');
+
+  let winningDeclarationMelds: Card[][] | null = null;
 
   await runTransaction(db, async (tx) => {
     // 1. ALL READS FIRST
@@ -1803,7 +1798,7 @@ export async function playBotTurn(gameId: string, botUid: string): Promise<void>
       ...playerSnaps.filter((s) => s.exists()).map((s) => s.data() as GamePlayerState),
     ];
 
-    // 2. BOT DRAWS CARD
+    // 2. BOT CARDS SETUP
     let closedDeck: Card[] = [];
     if (deckSnap && deckSnap.exists()) {
       const deckData = deckSnap.data() as { closedDeck: Card[] };
@@ -1813,41 +1808,149 @@ export async function playBotTurn(gameId: string, botUid: string): Promise<void>
       closedDeck = shuffleDeck(create108Deck());
     }
 
-    let newOpenDeck = [...(gameData.openDeck || [])];
-    let drawnCard: Card;
-    if (newOpenDeck.length > 0 && Math.random() < 0.2) {
-      drawnCard = newOpenDeck.pop()!;
-    } else {
-      drawnCard = closedDeck.pop() || shuffleDeck(create108Deck()).pop()!;
-    }
-
-    // Bot Hand
+    const wildJokerRank = gameData.wildJoker?.rank;
     let botHand = [...(botData.cards || [])];
     if (botHand.length === 0) {
       for (let i = 0; i < 13; i++) {
         botHand.push(closedDeck.pop() || shuffleDeck(create108Deck()).pop()!);
       }
     }
+
+    let newOpenDeck = [...(gameData.openDeck || [])];
+    const topOpenCard = newOpenDeck.length > 0 ? newOpenDeck[newOpenDeck.length - 1] : null;
+
+    // Evaluate bot's current hand baseline score
+    const currentMelds = findBestMelds(botHand, wildJokerRank);
+    const currentEval = calculateLiveHandScore(currentMelds, wildJokerRank);
+    const currentScore = currentEval.score;
+    const botTurns = ((botData as any).turnsCount || 0) + 1;
+
+    // 3. SMART CARD DRAW DECISION:
+    // Determine whether to pick topOpenCard or draw from closedDeck
+    let drawnCard: Card;
+    let drewFromOpen = false;
+
+    if (topOpenCard) {
+      const isTopJoker = isJokerCard(topOpenCard, wildJokerRank);
+      if (isTopJoker) {
+        // Jokers are always top priority!
+        drewFromOpen = true;
+      } else {
+        // Test if topOpenCard improves hand
+        const testHand = [...botHand, topOpenCard];
+        let bestTestScore = 999;
+        for (let i = 0; i < testHand.length; i++) {
+          if (isJokerCard(testHand[i], wildJokerRank)) continue;
+          const rem = testHand.filter((_, idx) => idx !== i);
+          const score = calculateLossPoints(rem, wildJokerRank);
+          if (score < bestTestScore) {
+            bestTestScore = score;
+          }
+        }
+        if (bestTestScore < currentScore) {
+          drewFromOpen = true;
+        }
+      }
+    }
+
+    if (drewFromOpen) {
+      drawnCard = newOpenDeck.pop()!;
+    } else {
+      // Draw from closed deck:
+      // High-priority: Check if any card in closedDeck can produce a WIN (0 score)
+      let smartCardIdx = -1;
+      if (botTurns >= 4) {
+        for (let i = closedDeck.length - 1; i >= 0; i--) {
+          const testCard = closedDeck[i];
+          const test14 = [...botHand, testCard];
+          for (let j = 0; j < test14.length; j++) {
+            if (isJokerCard(test14[j], wildJokerRank)) continue;
+            const rem13 = test14.filter((_, idx) => idx !== j);
+            const evalRes = calculateLiveHandScore(findBestMelds(rem13, wildJokerRank), wildJokerRank);
+            if (evalRes.score === 0 && evalRes.isWinningHand) {
+              smartCardIdx = i;
+              break;
+            }
+          }
+          if (smartCardIdx !== -1) break;
+        }
+      }
+
+      // Medium-priority: If bot still has > 15 score after 3 turns, check if a card improves score
+      if (smartCardIdx === -1 && botTurns >= 3 && currentScore > 15) {
+        for (let i = closedDeck.length - 1; i >= 0; i--) {
+          const testCard = closedDeck[i];
+          const test14 = [...botHand, testCard];
+          for (let j = 0; j < test14.length; j++) {
+            if (isJokerCard(test14[j], wildJokerRank)) continue;
+            const rem13 = test14.filter((_, idx) => idx !== j);
+            const score = calculateLossPoints(rem13, wildJokerRank);
+            if (score < currentScore - 4) {
+              smartCardIdx = i;
+              break;
+            }
+          }
+          if (smartCardIdx !== -1) break;
+        }
+      }
+
+      if (smartCardIdx !== -1) {
+        drawnCard = closedDeck.splice(smartCardIdx, 1)[0];
+      } else {
+        drawnCard = closedDeck.pop() || shuffleDeck(create108Deck()).pop()!;
+      }
+    }
+
     botHand.push(drawnCard);
 
-    // 3. BOT DISCARDS CARD
-    const wildJokerRank = gameData.wildJoker?.rank;
-    const nonJokers = botHand.filter(
-      (c) => !c.isPrintedJoker && c.rank !== 'JOKER' && c.rank !== wildJokerRank
-    );
-    const cardToDiscard = nonJokers.length > 0
-      ? nonJokers[Math.floor(Math.random() * nonJokers.length)]
-      : botHand[0];
+    // 4. 14-CARD EVALUATION: Find best discard to minimize penalty
+    let bestDiscardIdx = -1;
+    let minScore = 999;
+    let bestMelds: Card[][] = [];
+    let highestPoint = -1;
 
-    const discardIdx = botHand.findIndex((c) => c.id === cardToDiscard.id);
-    if (discardIdx >= 0) {
-      botHand.splice(discardIdx, 1);
-    } else {
-      botHand.pop();
+    for (let i = 0; i < botHand.length; i++) {
+      const candidate = botHand[i];
+      const isJoker = isJokerCard(candidate, wildJokerRank);
+      const remaining13 = botHand.filter((_, idx) => idx !== i);
+      const melds = findBestMelds(remaining13, wildJokerRank);
+      const evalRes = calculateLiveHandScore(melds, wildJokerRank);
+      const score = evalRes.score;
+      const pt = getCardPoint(candidate, wildJokerRank);
+
+      // Heavily penalize discarding jokers
+      const effectiveScore = isJoker ? score + 100 : score;
+
+      if (
+        effectiveScore < minScore ||
+        (effectiveScore === minScore && pt > highestPoint)
+      ) {
+        minScore = effectiveScore;
+        highestPoint = pt;
+        bestDiscardIdx = i;
+        bestMelds = melds;
+      }
     }
+
+    if (bestDiscardIdx === -1) {
+      bestDiscardIdx = botHand.length - 1;
+      const rem13 = botHand.filter((_, idx) => idx !== bestDiscardIdx);
+      bestMelds = findBestMelds(rem13, wildJokerRank);
+    }
+
+    const cardToDiscard = botHand[bestDiscardIdx];
+    botHand.splice(bestDiscardIdx, 1);
     newOpenDeck.push(cardToDiscard);
 
-    // 4. NEXT PLAYER
+    // Check if bot has reached a valid winning hand (0 score)
+    const finalEval = calculateLiveHandScore(bestMelds, wildJokerRank);
+    const isBotWinner = finalEval.score === 0 || finalEval.isWinningHand;
+
+    if (isBotWinner) {
+      winningDeclarationMelds = bestMelds;
+    }
+
+    // 5. NEXT PLAYER SEAT
     const otherActivePlayers = playerDocs
       .filter((p) => p.uid !== botUid && (p.status === 'playing' || p.status === 'waiting' || !p.status))
       .sort((a, b) => (a.seatIndex || 0) - (b.seatIndex || 0));
@@ -1861,17 +1964,20 @@ export async function playBotTurn(gameId: string, botUid: string): Promise<void>
 
     const now = Date.now();
 
-    // 5. ATOMIC WRITES
+    // 6. ATOMIC TRANSACTION WRITES
     tx.set(secretDeckRef, { closedDeck }, { merge: true });
     tx.update(botRef, {
       cards: botHand,
       cardCount: botHand.length,
-      status: 'playing',
+      status: isBotWinner ? 'declared' : 'playing',
+      score: finalEval.score,
+      turnsCount: botTurns,
     });
+
     tx.update(gameRef, {
       openDeck: newOpenDeck,
       closedDeckCount: closedDeck.length,
-      turnUid: nextPlayerUid,
+      turnUid: isBotWinner ? botUid : nextPlayerUid,
       turnStartedAt: now,
       turnDeadline: now + 60000,
       turnExtensionCount: 0,
@@ -1879,6 +1985,16 @@ export async function playBotTurn(gameId: string, botUid: string): Promise<void>
       updatedAt: new Date().toISOString(),
     });
   });
+
+  // 7. IF BOT WON: EXECUTE DECLARE HAND OUTSIDE TRANSACTION
+  const declMelds = winningDeclarationMelds as Card[][] | null;
+  if (declMelds && declMelds.length > 0) {
+    try {
+      await declareHand(gameId, botUid, declMelds);
+    } catch (err) {
+      console.error('Bot winning declaration error:', err);
+    }
+  }
 }
 
 /**
