@@ -1857,9 +1857,9 @@ export async function playBotTurn(gameId: string, botUid: string): Promise<void>
       drawnCard = newOpenDeck.pop()!;
     } else {
       // Draw from closed deck:
-      // High-priority: Check if any card in closedDeck can produce a WIN (0 score)
+      // High-priority: Check if any card in closedDeck can produce a WIN (0 score) starting on Turn >= 3
       let smartCardIdx = -1;
-      if (botTurns >= 4) {
+      if (botTurns >= 3) {
         for (let i = closedDeck.length - 1; i >= 0; i--) {
           const testCard = closedDeck[i];
           const test14 = [...botHand, testCard];
@@ -1876,8 +1876,8 @@ export async function playBotTurn(gameId: string, botUid: string): Promise<void>
         }
       }
 
-      // Medium-priority: If bot still has > 15 score after 3 turns, check if a card improves score
-      if (smartCardIdx === -1 && botTurns >= 3 && currentScore > 15) {
+      // Priority 2: Score reduction starting on Turn >= 2 (seize cards that reduce score by 3+ points)
+      if (smartCardIdx === -1 && botTurns >= 2 && currentScore > 10) {
         for (let i = closedDeck.length - 1; i >= 0; i--) {
           const testCard = closedDeck[i];
           const test14 = [...botHand, testCard];
@@ -1885,7 +1885,7 @@ export async function playBotTurn(gameId: string, botUid: string): Promise<void>
             if (isJokerCard(test14[j], wildJokerRank)) continue;
             const rem13 = test14.filter((_, idx) => idx !== j);
             const score = calculateLossPoints(rem13, wildJokerRank);
-            if (score < currentScore - 4) {
+            if (score < currentScore - 3) {
               smartCardIdx = i;
               break;
             }

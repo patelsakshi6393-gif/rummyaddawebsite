@@ -1477,7 +1477,7 @@ export default function GameRoomPage() {
                             : 'Waiting for real players to join...'}
                         </p>
                         <p className="text-[10px] text-emerald-400 font-medium">
-                          100% Real Players Online • Zero Bots
+                          ⚡ Instant Matchmaking • Fair Play Certified
                         </p>
                       </div>
 
@@ -1521,23 +1521,7 @@ export default function GameRoomPage() {
                         </span>
                       </button>
 
-                      {/* Optional Practice Table Bot Match Button (STRICTLY restricted to practice tables, NEVER rendered on cash tables) */}
-                      {canInjectBotIntoGame(game) && !isBoosted && (
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            if (!user || !game) return;
-                            try {
-                              await autoMatchWithBots(game.gameId, user.uid);
-                            } catch (err) {
-                              console.error('Bot match error:', err);
-                            }
-                          }}
-                          className="w-full py-1.5 px-3 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 font-bold text-[10px] border border-amber-500/30 transition-colors cursor-pointer flex items-center justify-center gap-1.5"
-                        >
-                          <span>🤖 Add AI Opponent</span>
-                        </button>
-                      )}
+
 
                       <button
                         type="button"
